@@ -1,22 +1,31 @@
-// PROTOTYPE page-side fix loop: loading indicator + clipboard + click-to-paste toast.
+// PROTOTYPE page-side fix loop — DIAGNOSTIC BUILD (v0.0.3-dbg).
 //
-// Injected as a FILE (chrome.scripting "files") so it can carry CSS without
-// serializing a giant inline function. Runs in the page's isolated world: shares
-// the DOM (can read/write the selection, the field, render UI) and has access to
-// chrome.runtime.sendMessage, but never receives the API key.
+// Felix reports the loading indicator / toast don't appear at all. Two prior
+// fixes (inline CSS, file injection) didn't resolve it — so this build stops
+// guessing and emits an UNMISSABLE on-page trace so we can see exactly where
+// execution stops. Every step appends a green line to a fixed panel; if the
+// panel appears but stops mid-way, we know the failing step. If the panel
+// DOESN'T appear, the script isn't injecting at all (different problem).
 //
-// chrome.scripting injects this file fresh on each context-menu click — so we
-// run runFix() every time (one Fix per click). The dismiss listener is the only
-// thing that should be registered exactly once per page load.
-runFix();
+// Also wraps everything in a top-level try/catch that shows a RED toast with
+// the error message — no more silent failures.
+//
+// Remove the diagnostic block (diag*, TOPLEVEL_ERR_TOAST_CSS) once the cause
+// is found.
+
+// --- top-level catch: any throw in this script surfaces as a red toast ---
+try {
+  runFix();
+} catch (err) {
+  showFatalToast(String(err?.stack || err?.message || err));
+}
+
 if (!window.__mygrammarDismissBound) {
   window.__mygrammarDismissBound = true;
   document.addEventListener(
     "click",
     (e) => {
       if (!currentBox) return;
-      // Click landed inside the shadow DOM (e.target retargets to the host on a
-      // closed root) — let the Paste handler deal with it, don't dismiss.
       if (currentBox.host.contains(e.target)) return;
       hideBox();
     },
@@ -25,11 +34,13 @@ if (!window.__mygrammarDismissBound) {
 }
 
 async function runFix() {
+  diag("start");
   const TEXT_INPUT_TYPES = new Set(["text", "search", "url", "email", "tel"]);
 
   // --- 1. locate the focused editable element ---------------------------
   let el = document.activeElement;
   while (el && el.shadowRoot) el = el.shadowRoot.activeElement;
+  diag("activeElement: " + (el ? `<${el.tagName.toLowerCase()}${el.isContentEditable ? " [contenteditable]" : ""}>` : "null"));
 
   let kind;
   if (
@@ -37,10 +48,12 @@ async function runFix() {
     (el instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(el.type))
   ) {
     if (el.readOnly || el.disabled) {
+      diag("field read-only/disabled → stop");
       showBox({ kind: "error", text: "Field is read-only." }, el);
       return;
     }
     if (el.selectionStart === el.selectionEnd) {
+      diag("no selection in native field → stop");
       showBox({ kind: "error", text: "Select some text first." }, el);
       return;
     }
@@ -48,45 +61,49 @@ async function runFix() {
   } else if (el && el.isContentEditable) {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      diag("no selection in contenteditable → stop");
       showBox({ kind: "error", text: "Select some text first." }, el);
       return;
     }
     kind = "ce";
   } else {
-    // Nothing editable focused — toast at the click position is pointless; skip.
+    diag("no editable focused → stop (silent)");
     return;
   }
+  diag("kind=" + kind);
 
   // --- 2. capture selection + position BEFORE the async call ------------
-  // (The API call is async; the selection can drift. We snapshot now and
-  // restore on paste so the replacement is always the original target.)
   const selectedText =
     kind === "native"
       ? el.value.slice(el.selectionStart, el.selectionEnd)
       : window.getSelection().toString();
+  diag("selectedText len=" + selectedText.length);
 
   if (!selectedText.trim()) {
     showBox({ kind: "error", text: "Nothing selected." }, el);
     return;
   }
 
-  // For native controls, store offsets; for contenteditable, store the Range.
   const target = kind === "native"
     ? { kind: "native", el, start: el.selectionStart, end: el.selectionEnd }
     : { kind: "ce", el, range: window.getSelection().getRangeAt(0).cloneRange() };
 
   const anchorRect = caretRect();
+  diag("anchorRect=" + (anchorRect ? JSON.stringify({l:anchorRect.left|0,t:anchorRect.top|0,b:anchorRect.bottom|0}) : "null"));
 
   // --- 3. show the loading indicator while the AI works -----------------
+  diag("showBox loading");
   showBox({ kind: "loading", text: "Fixing…" }, null, anchorRect);
 
   let corrected;
   try {
+    diag("sending MG_FIX…");
     const resp = await chrome.runtime.sendMessage({
       type: "MG_FIX",
       mode: "fix-grammar",
       text: selectedText,
     });
+    diag("got response: " + (resp ? (resp.error ? "error=" + resp.error : "ok len=" + (resp.fixedText?.length || 0)) : "null"));
     if (!resp || resp.error) {
       hideBox();
       showBox(
@@ -98,6 +115,7 @@ async function runFix() {
     }
     corrected = resp.fixedText;
   } catch (err) {
+    diag("sendMessage threw: " + String(err?.message || err));
     hideBox();
     showBox(
       { kind: "error", text: truncate(String(err?.message || err)) },
@@ -108,18 +126,16 @@ async function runFix() {
   }
 
   // --- 4. clipboard copy (best-effort) + click-to-paste toast -----------
-  // Browsers require a user gesture to write the clipboard. The right-click
-  // gesture has expired by now, so the immediate copy may fail silently — the
-  // Paste button (a fresh gesture) is the reliable path. We try the async API
-  // first; if it throws, the toast still shows and Paste writes it then.
   let copied = false;
   try {
     await navigator.clipboard.writeText(corrected);
     copied = true;
-  } catch {
-    // Will be written on the Paste click instead.
+    diag("clipboard wrote (immediate)");
+  } catch (err) {
+    diag("clipboard immediate write failed (will retry on Paste): " + String(err?.message || err));
   }
 
+  diag("showBox done");
   showBox(
     {
       kind: "done",
@@ -131,6 +147,7 @@ async function runFix() {
     null,
     anchorRect
   );
+  diag("done");
 }
 
 // --- replacement: the React-safe native-setter + execCommand paths (#4) ---
@@ -175,17 +192,10 @@ let currentBox = null; // { host, shadow }
 function ensureShadow() {
   if (currentBox) return currentBox;
   const host = document.createElement("div");
-  host.style.all = "initial";
-  const shadow = host.attachShadow({ mode: "closed" });
+  host.setAttribute("data-mygrammar", "ui-root");
+  host.style.cssText = "all: initial; margin: 0; padding: 0;";
+  const shadow = host.attachShadow({ mode: "open" }); // open so DevTools can inspect
 
-  // Inline the CSS as a <style> tag (NOT a <link>). A <link> loads
-  // asynchronously, so the FIRST showBox() — the loading indicator, created
-  // the instant the user right-clicks — would render before the stylesheet
-  // applied: unstyled, transparent, in flow at the bottom of the page. The
-  // user would see the done toast (CSS live by then) but never the spinner.
-  // A <style> tag applies synchronously, so the loading box is styled on the
-  // same frame it's created. This also drops the web_accessible_resources
-  // dependency.
   const style = document.createElement("style");
   style.textContent = TOAST_CSS;
   shadow.appendChild(style);
@@ -199,8 +209,165 @@ function ensureShadow() {
   return currentBox;
 }
 
-// Inlined copy of content/toast.css. Kept in sync manually for the prototype;
-// production should bundle or generate this.
+function showBox(state, _el, anchorRect) {
+  const { wrapper } = ensureShadow();
+  wrapper.innerHTML = "";
+
+  const box = document.createElement("div");
+  box.className = "mygrammar-box";
+
+  if (state.kind === "loading") {
+    const spin = document.createElement("div");
+    spin.className = "mygrammar-spinner";
+    box.appendChild(spin);
+    const t = document.createElement("div");
+    t.className = "mygrammar-text";
+    t.textContent = state.text;
+    box.appendChild(t);
+  } else if (state.kind === "error") {
+    box.classList.add("mygrammar-err");
+    const x = document.createElement("span");
+    x.className = "mygrammar-check";
+    x.textContent = "✕";
+    box.appendChild(x);
+    const t = document.createElement("div");
+    t.className = "mygrammar-text";
+    t.textContent = state.text;
+    box.appendChild(t);
+  } else if (state.kind === "done") {
+    const c = document.createElement("span");
+    c.className = "mygrammar-check";
+    c.textContent = "✓";
+    box.appendChild(c);
+    const t = document.createElement("div");
+    t.className = "mygrammar-text";
+    t.textContent = state.text;
+    box.appendChild(t);
+    const btn = document.createElement("button");
+    btn.className = "mygrammar-paste-btn";
+    btn.type = "button";
+    btn.textContent = "Paste";
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(state.corrected);
+      } catch {
+        /* best-effort */
+      }
+      applyPaste(state.target, state.corrected);
+      hideBox();
+    });
+    box.appendChild(btn);
+  }
+
+  wrapper.appendChild(box);
+  positionBox(box, anchorRect || caretRect());
+}
+
+function hideBox() {
+  if (!currentBox) return;
+  currentBox.host.remove();
+  currentBox = null;
+}
+
+function positionBox(box, rect) {
+  if (!rect) {
+    box.style.top = "16px";
+    box.style.right = "16px";
+    return;
+  }
+  const margin = 8;
+  let left = rect.left;
+  let top = rect.bottom + margin;
+  const boxHeight = 40;
+  if (top + boxHeight > window.innerHeight) {
+    top = Math.max(margin, rect.top - boxHeight - margin);
+  }
+  left = Math.min(
+    Math.max(margin, left),
+    window.innerWidth - box.offsetWidth - margin
+  );
+  box.style.left = left + "px";
+  box.style.top = top + "px";
+}
+
+// --- helpers --------------------------------------------------------------
+
+function caretRect() {
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount > 0) {
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    if (r && (r.top || r.left || r.bottom || r.right)) return r;
+  }
+  const el = document.activeElement;
+  if (el && typeof el.getBoundingClientRect === "function") {
+    const r = el.getBoundingClientRect();
+    if (r && (r.top || r.bottom)) return r;
+  }
+  return null;
+}
+
+function truncate(s, n = 80) {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// --- FATAL ERROR TOAST (top-level catch) ----------------------------------
+
+function showFatalToast(msg) {
+  try {
+    const div = document.createElement("div");
+    div.textContent = "⚠ MyGrammar fatal: " + truncate(msg, 200);
+    div.style.cssText =
+      "position:fixed;top:0;left:0;right:0;z-index:2147483647;" +
+      "background:#b3261e;color:#fff;font:13px system-ui,sans-serif;" +
+      "padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
+    document.documentElement.appendChild(div);
+    setTimeout(() => div.remove(), 30000);
+  } catch {
+    /* nothing more we can do */
+  }
+}
+
+// === DIAGNOSTIC TRACE PANEL ==============================================
+// A fixed green panel top-right. Every diag() call appends a line. If you see
+// this panel, the script IS injecting. The last line shown = the last step
+// reached before the problem. If you DON'T see it, injection itself failed.
+
+let diagPanel = null;
+function ensureDiagPanel() {
+  if (diagPanel && document.body.contains(diagPanel)) return diagPanel;
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "position:fixed;top:8px;right:8px;z-index:2147483647;" +
+    "background:#064e3b;color:#a7f3d0;font:12px ui-monospace,Consolas,monospace;" +
+    "padding:10px 12px;border-radius:6px;max-width:380px;max-height:60vh;" +
+    "overflow:auto;box-shadow:0 4px 14px rgba(0,0,0,0.35);line-height:1.5;" +
+    "border:1px solid #10b981;white-space:pre-wrap;";
+  const title = document.createElement("div");
+  title.textContent = "MyGrammar diagnostic trace v0.0.3-dbg";
+  title.style.cssText = "font-weight:bold;margin-bottom:6px;border-bottom:1px solid #10b981;padding-bottom:4px;";
+  wrap.appendChild(title);
+  const body = document.createElement("div");
+  body.id = "mygrammar-diag-body";
+  wrap.appendChild(body);
+  document.documentElement.appendChild(wrap);
+  diagPanel = body;
+  return body;
+}
+function diag(msg) {
+  const body = ensureDiagPanel();
+  const line = document.createElement("div");
+  line.textContent = "• " + msg;
+  line.style.borderTop = body.childNodes.length ? "1px dashed rgba(167,243,208,0.25)" : "none";
+  line.style.paddingTop = body.childNodes.length ? "3px" : "0";
+  body.appendChild(line);
+  // also console.log so it's findable in page DevTools
+  try { console.log("[MyGrammar]", msg); } catch {}
+}
+// Emit an immediate "injected" line so we can tell injection-vs-execution apart.
+diag("injected @ " + new Date().toISOString().slice(11, 23) + " url=" + location.href);
+
+// --- inlined toast CSS ----------------------------------------------------
+
 const TOAST_CSS = `
 .mygrammar-shadow,
 .mygrammar-shadow * {
@@ -273,111 +440,3 @@ const TOAST_CSS = `
 
 .mygrammar-err .mygrammar-text { color: #fca5a5; }
 `;
-
-function showBox(state, _el, anchorRect) {
-  const { wrapper } = ensureShadow();
-  wrapper.innerHTML = "";
-
-  const box = document.createElement("div");
-  box.className = "mygrammar-box";
-
-  if (state.kind === "loading") {
-    box.innerHTML =
-      '<div class="mygrammar-spinner"></div>' +
-      '<div class="mygrammar-text"></div>';
-    box.querySelector(".mygrammar-text").textContent = state.text;
-  } else if (state.kind === "error") {
-    box.classList.add("mygrammar-err");
-    box.innerHTML =
-      '<span class="mygrammar-check">✕</span>' +
-      '<div class="mygrammar-text"></div>';
-    box.querySelector(".mygrammar-text").textContent = state.text;
-  } else if (state.kind === "done") {
-    box.innerHTML =
-      '<span class="mygrammar-check">✓</span>' +
-      '<div class="mygrammar-text"></div>' +
-      '<button class="mygrammar-paste-btn" type="button">Paste</button>';
-    box.querySelector(".mygrammar-text").textContent = state.text;
-
-    const btn = box.querySelector(".mygrammar-paste-btn");
-    btn.addEventListener("click", async () => {
-      // Fresh user gesture — clipboard write is guaranteed here.
-      try {
-        await navigator.clipboard.writeText(state.corrected);
-      } catch {
-        /* best-effort; the in-place paste proceeds regardless */
-      }
-      applyPaste(state.target, state.corrected);
-      hideBox();
-    });
-  }
-
-  wrapper.appendChild(box);
-
-  // Position near the anchor (caret/click); fall back to top-right.
-  const rect = anchorRect || (caretRect());
-  positionBox(box, rect);
-}
-
-function hideBox() {
-  if (!currentBox) return;
-  currentBox.host.remove();
-  currentBox = null;
-}
-
-function positionBox(box, rect) {
-  if (!rect) {
-    box.style.top = "16px";
-    box.style.right = "16px";
-    return;
-  }
-  const margin = 8;
-  let left = rect.left;
-  let top = rect.bottom + margin;
-  // Flip above if it would overflow the viewport bottom.
-  const boxHeight = 40; // approx, for the flip check
-  if (top + boxHeight > window.innerHeight) {
-    top = Math.max(margin, rect.top - boxHeight - margin);
-  }
-  // Clamp horizontally into view.
-  left = Math.min(
-    Math.max(margin, left),
-    window.innerWidth - box.offsetWidth - margin
-  );
-  box.style.left = left + "px";
-  box.style.top = top + "px";
-}
-
-// --- helpers --------------------------------------------------------------
-
-// Best available caret position. For contenteditable, getSelection().getRangeAt
-// .getBoundingClientRect() works; for native controls, fall back to the element.
-function caretRect() {
-  const sel = window.getSelection();
-  if (sel && sel.rangeCount > 0) {
-    const r = sel.getRangeAt(0).getBoundingClientRect();
-    if (r && (r.top || r.left || r.bottom || r.right)) return r;
-  }
-  const el = document.activeElement;
-  if (el && typeof el.getBoundingClientRect === "function") {
-    const r = el.getBoundingClientRect();
-    if (r && (r.top || r.bottom)) return r;
-  }
-  return null;
-}
-
-function truncate(s, n = 80) {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-
-// Click outside the toast dismisses it.
-document.addEventListener(
-  "click",
-  (e) => {
-    if (!currentBox) return;
-    // The click landed inside the shadow DOM — let the Paste handler deal with it.
-    if (currentBox.host.contains(e.target)) return;
-    hideBox();
-  },
-  true
-);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyGrammar (Prototype)",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "PROTOTYPE — core Fix loop only. Select text, right-click → Fix grammar; loading indicator + click-to-paste toast.",
 
   "background": {
