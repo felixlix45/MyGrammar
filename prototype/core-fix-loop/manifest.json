@@ -15,12 +15,5 @@
 
   "optional_host_permissions": ["https://*/*", "http://*/*"],
 
-  "web_accessible_resources": [
-    {
-      "resources": ["content/toast.css"],
-      "matches": ["<all_urls>"]
-    }
-  ],
-
   "minimum_chrome_version": "102"
 }

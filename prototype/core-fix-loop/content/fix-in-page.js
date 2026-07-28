@@ -178,10 +178,16 @@ function ensureShadow() {
   host.style.all = "initial";
   const shadow = host.attachShadow({ mode: "closed" });
 
-  const style = document.createElement("link");
-  style.rel = "stylesheet";
-  // chrome.runtime.getURL works in the content-script world.
-  style.href = chrome.runtime.getURL("content/toast.css");
+  // Inline the CSS as a <style> tag (NOT a <link>). A <link> loads
+  // asynchronously, so the FIRST showBox() — the loading indicator, created
+  // the instant the user right-clicks — would render before the stylesheet
+  // applied: unstyled, transparent, in flow at the bottom of the page. The
+  // user would see the done toast (CSS live by then) but never the spinner.
+  // A <style> tag applies synchronously, so the loading box is styled on the
+  // same frame it's created. This also drops the web_accessible_resources
+  // dependency.
+  const style = document.createElement("style");
+  style.textContent = TOAST_CSS;
   shadow.appendChild(style);
 
   const wrapper = document.createElement("div");
@@ -192,6 +198,81 @@ function ensureShadow() {
   currentBox = { host, shadow, wrapper };
   return currentBox;
 }
+
+// Inlined copy of content/toast.css. Kept in sync manually for the prototype;
+// production should bundle or generate this.
+const TOAST_CSS = `
+.mygrammar-shadow,
+.mygrammar-shadow * {
+  box-sizing: border-box;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.mygrammar-box {
+  position: fixed;
+  z-index: 2147483647;
+  background: #1f2937;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.3;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 320px;
+  animation: mygrammar-fade-in 120ms ease-out;
+}
+
+@keyframes mygrammar-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.mygrammar-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: mygrammar-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes mygrammar-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mygrammar-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mygrammar-paste-btn {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mygrammar-paste-btn:hover { background: #2563eb; }
+.mygrammar-paste-btn:active { background: #1d4ed8; }
+
+.mygrammar-check {
+  color: #34d399;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.mygrammar-err .mygrammar-text { color: #fca5a5; }
+`;
 
 function showBox(state, _el, anchorRect) {
   const { wrapper } = ensureShadow();
