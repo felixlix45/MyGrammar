@@ -1,16 +1,23 @@
-// PROTOTYPE background service worker — core Fix loop only.
+// PROTOTYPE background service worker — core Fix loop with loading + toast UX.
 //
 // Locked decisions implemented:
-//  - #2: no static content script. Page-side code is injected via chrome.scripting
-//        on the user gesture (context-menu click), under activeTab.
+//  - #2: no static content script. The page-side code is injected via
+//        chrome.scripting on the user gesture (context-menu click), under activeTab.
 //  - #3: the API key never enters the page. The injected function messages us
 //        { type: "MG_FIX", text } and we return { fixedText } — never the key.
 //  - #4: replacement uses the React-safe native-setter path for <input>/<textarea>,
 //        execCommand('insertText') first for contenteditable.
 //
-// OUT OF SCOPE for this prototype (per ticket #5): encryption (key is plaintext in
-// storage.local for now), modes submenu, keyboard shortcut, toasts, onboarding,
-// iframe targeting. See README.md.
+// REVISED interaction model (candidate — not yet locked into the map):
+//  - On completion the corrected text is COPIED to the clipboard and a toast with
+//    a Paste button appears near the cursor. The user reviews, then clicks Paste
+//    (one gesture) to replace in-place, or pastes elsewhere / ignores it.
+//  - Replaces the previous "auto-replace in-place" behavior. Decision waits for
+//    the user's reaction before being folded into the map.
+//
+// OUT OF SCOPE for this prototype (per ticket #5): encryption (key plaintext in
+// storage.local for now), modes submenu, keyboard shortcut, onboarding, iframe
+// targeting. See README.md.
 
 const MODES = {
   "fix-grammar": {
@@ -25,7 +32,6 @@ const MODES = {
 
 // --- context menu ---------------------------------------------------------
 
-// Register listeners synchronously at the top level (MV3 worker rule).
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "fix-grammar",
@@ -37,123 +43,13 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== "fix-grammar") return;
   if (!tab?.id) return;
-  runFixInTab(tab.id).catch((err) => {
-    console.error("[MyGrammar] fix failed", err);
-  });
+  chrome.scripting
+    .executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      files: ["content/fix-in-page.js"],
+    })
+    .catch((err) => console.error("[MyGrammar] inject failed", err));
 });
-
-// --- the loop: inject the page-side function ------------------------------
-
-async function runFixInTab(tabId) {
-  // Inject into all frames so text fields in iframes are reachable too.
-  // activeTab (granted by the context-menu gesture) covers the permission.
-  const results = await chrome.scripting.executeScript({
-    target: { tabId, allFrames: true },
-    func: pageSideFixLoop,
-  });
-
-  // executeScript returns one entry per frame; find the meaningful one.
-  const meaningful = results
-    .map((r) => ({ frameId: r.frameId, ...(r.result || {}) }))
-    .find((r) => r.ok || (r.reason && r.reason !== "no-editable-target"));
-
-  if (meaningful) {
-    console.log("[MyGrammar] fix result:", meaningful);
-  } else {
-    console.log("[MyGrammar] no editable target / no selection in any frame");
-  }
-}
-
-// This function is serialized and injected into the page's isolated world.
-// It MUST be self-contained (no closure variables — only `args` carry across).
-// It shares the page's DOM (so it can read/write the selection and field value)
-// and runs as a content script (so chrome.runtime.sendMessage works).
-async function pageSideFixLoop() {
-  const TEXT_INPUT_TYPES = new Set(["text", "search", "url", "email", "tel"]);
-
-  // 1. Find the focused editable element (descend through Shadow DOM).
-  let el = document.activeElement;
-  while (el && el.shadowRoot) el = el.shadowRoot.activeElement;
-
-  // 2. Read the selection + remember which path to use for replacement.
-  let kind;
-  if (
-    el instanceof HTMLTextAreaElement ||
-    (el instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(el.type))
-  ) {
-    if (el.readOnly || el.disabled) return { ok: false, reason: "read-only" };
-    if (el.selectionStart === el.selectionEnd)
-      return { ok: false, reason: "no-selection" };
-    kind = "native";
-  } else if (el && el.isContentEditable) {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed)
-      return { ok: false, reason: "no-selection" };
-    kind = "ce";
-  } else {
-    return { ok: false, reason: "no-editable-target" };
-  }
-
-  // Capture the selected text for the API call.
-  const selectedText =
-    kind === "native"
-      ? el.value.slice(el.selectionStart, el.selectionEnd)
-      : window.getSelection().toString();
-
-  if (!selectedText.trim())
-    return { ok: false, reason: "empty-selection" };
-
-  // 3. Ask the background to fix it. The key never enters the page.
-  let corrected;
-  try {
-    const resp = await chrome.runtime.sendMessage({
-      type: "MG_FIX",
-      mode: "fix-grammar",
-      text: selectedText,
-    });
-    if (!resp || resp.error)
-      return { ok: false, reason: "api-error", error: resp?.error || "no response" };
-    corrected = resp.fixedText;
-  } catch (err) {
-    return { ok: false, reason: "send-failed", error: String(err) };
-  }
-
-  // 4. Replace in-place — selection is still live (no async since the send).
-  if (kind === "native") {
-    const s = el.selectionStart;
-    const e = el.selectionEnd;
-    const next = el.value.slice(0, s) + corrected + el.value.slice(e);
-    const proto =
-      el instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, next);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.setSelectionRange(s + corrected.length, s + corrected.length);
-  } else {
-    // execCommand first (preserves undo); Range API fallback.
-    if (!document.execCommand("insertText", false, corrected)) {
-      const sel = window.getSelection();
-      const range = sel.getRangeAt(0);
-      range.deleteContents();
-      const node = document.createTextNode(corrected);
-      range.insertNode(node);
-      node.parentNode.normalize();
-      const r2 = document.createRange();
-      r2.setStartAfter(node);
-      r2.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r2);
-    }
-  }
-
-  return {
-    ok: true,
-    kind,
-    originalLen: selectedText.length,
-    fixedLen: corrected.length,
-  };
-}
 
 // --- message handler: the sole key holder ---------------------------------
 
@@ -203,6 +99,8 @@ async function fixText(text, modeKey) {
   const data = await resp.json();
   const fixed = data?.choices?.[0]?.message?.content;
   if (typeof fixed !== "string")
-    throw new Error("Unexpected provider response shape (no choices[0].message.content)");
+    throw new Error(
+      "Unexpected provider response shape (no choices[0].message.content)"
+    );
   return fixed;
 }

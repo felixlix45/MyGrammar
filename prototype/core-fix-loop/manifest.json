@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "MyGrammar (Prototype)",
-  "version": "0.0.1",
-  "description": "PROTOTYPE — core Fix loop only. Select text, right-click → Fix grammar, get it replaced in-place via your OpenAI-compatible endpoint.",
+  "version": "0.0.2",
+  "description": "PROTOTYPE — core Fix loop only. Select text, right-click → Fix grammar; loading indicator + click-to-paste toast.",
 
   "background": {
     "service_worker": "background/service-worker.js",
@@ -11,9 +11,16 @@
 
   "options_page": "options/options.html",
 
-  "permissions": ["contextMenus", "storage", "activeTab", "scripting"],
+  "permissions": ["contextMenus", "storage", "activeTab", "scripting", "clipboardWrite"],
 
   "optional_host_permissions": ["https://*/*", "http://*/*"],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["content/toast.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
 
   "minimum_chrome_version": "102"
 }

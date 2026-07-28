@@ -17,7 +17,7 @@
   </head>
   <body>
     <h1>MyGrammar prototype — test page</h1>
-    <p class="hint">Select any text below, right-click → <b>MyGrammar: Fix grammar</b>.</p>
+    <p class="hint">Select any text below, right-click → <b>MyGrammar: Fix grammar</b>. Wait for the loading indicator, then click <b>Paste</b> in the toast.</p>
 
     <h2>1. &lt;textarea&gt; (native, multi-line)</h2>
     <label for="ta">Try selecting part of this:</label>
@@ -33,10 +33,12 @@
 
     <h2>What to look for</h2>
     <ol>
-      <li>The selected text is replaced in-place; caret lands right after the inserted text.</li>
+      <li><b>Loading indicator</b> appears near the cursor while the AI works.</li>
+      <li>On finish: a <b>toast</b> near the cursor: "✓ Fixed — click Paste." Text is also on the clipboard.</li>
+      <li><b>Click Paste</b> → the selection is replaced in-place; caret lands after it.</li>
       <li>Native fields (textarea/input): works even on React-controlled inputs (native-setter path). Try it on any site.</li>
-      <li>contenteditable: <code>Ctrl+Z</code> should undo just the fix (execCommand preserves undo).</li>
-      <li>Errors show in the page's / extension's DevTools console (toasts are out of scope for the prototype).</li>
+      <li>contenteditable: <code>Ctrl+Z</code> should undo just the paste (execCommand preserves undo).</li>
+      <li>Clicking elsewhere dismisses the toast; errors show in a red toast.</li>
     </ol>
   </body>
 </html>
