@@ -25,5 +25,4 @@ desktop.ini
 # Logs
 *.log
 
-# Wayfinder research branches (throwaway)
-research/
+# Wayfinder research branches are git branches (research/<name>), not dirs — nothing to ignore here.
