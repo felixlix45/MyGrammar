@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "MyGrammar (Prototype)",
+  "version": "0.0.1",
+  "description": "PROTOTYPE — core Fix loop only. Select text, right-click → Fix grammar, get it replaced in-place via your OpenAI-compatible endpoint.",
+
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+
+  "options_page": "options/options.html",
+
+  "permissions": ["contextMenus", "storage", "activeTab", "scripting"],
+
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+
+  "minimum_chrome_version": "102"
+}

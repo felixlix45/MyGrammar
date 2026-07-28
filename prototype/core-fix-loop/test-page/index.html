@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- PROTOTYPE test page — exercise each input type the loop must handle. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>MyGrammar prototype — test page</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 760px; margin: 32px auto; padding: 0 16px; color: #1b1b1b; }
+      h1 { font-size: 1.2rem; } h2 { font-size: 1rem; margin-top: 28px; }
+      label { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 0.85rem; }
+      textarea, input[type="text"] { width: 100%; padding: 8px; font-size: 0.9rem; box-sizing: border-box; border: 1px solid #999; border-radius: 4px; }
+      .ce { border: 1px solid #999; border-radius: 4px; padding: 8px; min-height: 60px; font-size: 0.9rem; }
+      .hint { color: #666; font-size: 0.8rem; }
+      ol { font-size: 0.9rem; line-height: 1.6; }
+      code { background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>MyGrammar prototype — test page</h1>
+    <p class="hint">Select any text below, right-click → <b>MyGrammar: Fix grammar</b>.</p>
+
+    <h2>1. &lt;textarea&gt; (native, multi-line)</h2>
+    <label for="ta">Try selecting part of this:</label>
+    <textarea id="ta" rows="4">their is a problem with these sentence. it dont have no correct grammar and the spelling erors are bad.</textarea>
+
+    <h2>2. &lt;input type="text"&gt; (native, single-line)</h2>
+    <label for="in">Select inside:</label>
+    <input id="in" type="text" value="i thinks we should meeting tomorow afternoon" />
+
+    <h2>3. contenteditable (rich-text path)</h2>
+    <label for="ce">Select a word or phrase:</label>
+    <div id="ce" class="ce" contenteditable="true">we was going to the store but i forgeted my wallet their.</div>
+
+    <h2>What to look for</h2>
+    <ol>
+      <li>The selected text is replaced in-place; caret lands right after the inserted text.</li>
+      <li>Native fields (textarea/input): works even on React-controlled inputs (native-setter path). Try it on any site.</li>
+      <li>contenteditable: <code>Ctrl+Z</code> should undo just the fix (execCommand preserves undo).</li>
+      <li>Errors show in the page's / extension's DevTools console (toasts are out of scope for the prototype).</li>
+    </ol>
+  </body>
+</html>
